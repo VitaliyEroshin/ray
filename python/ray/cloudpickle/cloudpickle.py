@@ -293,7 +293,7 @@ def _lookup_module_and_qualname(obj, name=None):
 
     try:
         obj2, parent = _getattribute(module, name)
-    except AttributeError:
+    except (AttributeError, RecursionError):
         # obj was not found inside the module it points to
         return None
     if obj2 is not obj:

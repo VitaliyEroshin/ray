@@ -102,7 +102,7 @@ if PYPY:
     # builtin-code objects only exist in pypy
     builtin_code_type = type(float.__new__.__code__)
 
-_extract_code_globals_cache = {}
+_extract_code_globals_cache = weakref.WeakKeyDictionary()
 
 
 def _get_or_create_tracker_id(class_def):
@@ -218,7 +218,7 @@ def _whichmodule(obj, name):
         ):
             continue
         try:
-            if _getattribute(module, name)[0] is obj:
+            if _getattribute_from_module(module, name)[0] is obj:
                 return module_name
         except Exception:
             pass
@@ -292,8 +292,8 @@ def _lookup_module_and_qualname(obj, name=None):
         return None
 
     try:
-        obj2, parent = _getattribute(module, name)
-    except (AttributeError, RecursionError):
+        obj2, parent = _getattribute_from_module(module, name)
+    except AttributeError:
         # obj was not found inside the module it points to
         return None
     if obj2 is not obj:
@@ -301,13 +301,50 @@ def _lookup_module_and_qualname(obj, name=None):
     return module, name
 
 
+def _getattribute_from_module(module, name):
+    """Resolve a dotted attribute path starting from a module without using
+    module-level __getattr__ (PEP 562) for the module hop(s).
+
+    This avoids recursion / side effects in environments that install custom
+    module attribute hooks or proxy modules.
+    Returns (obj, parent) like pickle._getattribute.
+    """
+    obj = module
+    parent = None
+    for subpath in name.split("."):
+        parent = obj
+        if isinstance(obj, types.ModuleType):
+            try:
+                obj = obj.__dict__[subpath]
+            except KeyError as e:
+                raise AttributeError(subpath) from e
+        else:
+            obj = getattr(obj, subpath)
+    return obj, parent
+
+
 def _extract_code_globals(co):
     """Find all globals names read or written to by codeblock co."""
-    out_names = {name: None for name in _walk_global_ops(co)}
-    if co.co_consts:
-        for const in co.co_consts:
-            if isinstance(const, types.CodeType):
-                out_names.update(_extract_code_globals(const))
+    out_names = _extract_code_globals_cache.get(co)
+    if out_names is None:
+        # We use a dict with None values instead of a set to get a
+        # deterministic order and avoid introducing non-deterministic pickle
+        # bytes as a results.
+        out_names = {name: None for name in _walk_global_ops(co)}
+
+        # Declaring a function inside another one using the "def ..." syntax
+        # generates a constant code object corresponding to the one of the
+        # nested function's As the nested function may itself need global
+        # variables, we need to introspect its code, extract its globals, (look
+        # for code object in it's co_consts attribute..) and add the result to
+        # code_globals
+        if co.co_consts:
+            for const in co.co_consts:
+                if isinstance(const, types.CodeType):
+                    out_names.update(_extract_code_globals(const))
+
+        _extract_code_globals_cache[co] = out_names
+
     return out_names
 
 
@@ -1207,13 +1244,14 @@ class Pickler(pickle.Pickler):
         # cloudpickle.dumps([f1, f2])). There is no such limitation when using
         # cloudpickle.Pickler.dump, as long as the multiple invocations are
         # bound to the same cloudpickle.Pickler instance.
-        base_globals = {}
+        base_globals = self.globals_ref.setdefault(id(func.__globals__), {})
 
-        # Add module attributes used to resolve relative imports
-        # instructions inside func.
-        for k in ["__package__", "__name__", "__path__", "__file__"]:
-            if k in func.__globals__:
-                base_globals[k] = func.__globals__[k]
+        if base_globals == {}:
+            # Add module attributes used to resolve relative imports
+            # instructions inside func.
+            for k in ["__package__", "__name__", "__path__", "__file__"]:
+                if k in func.__globals__:
+                    base_globals[k] = func.__globals__[k]
 
         # Do not bind the free variables before the function is created to
         # avoid infinite recursion.
@@ -1241,7 +1279,7 @@ class Pickler(pickle.Pickler):
         # map functions __globals__ attribute ids, to ensure that functions
         # sharing the same global namespace at pickling time also share
         # their global namespace at unpickling time.
-        self.globals_ref = None
+        self.globals_ref = {}
         self.proto = int(protocol)
 
     if not PYPY:
@@ -1309,13 +1347,8 @@ class Pickler(pickle.Pickler):
                 is_anyclass = False
 
             if is_anyclass:
-                if getattr(obj, "__module__", None) == "builtins":
-                    return NotImplemented
                 return _class_reduce(obj)
             elif isinstance(obj, types.FunctionType):
-                mod = getattr(obj, "__module__", None)
-                if mod in ("ray.cloudpickle.cloudpickle", "cloudpickle.cloudpickle", "cloudpickle"):
-                    return NotImplemented
                 return self._function_reduce(obj)
             else:
                 # fallback to save_global, including the Pickler's

@@ -1309,10 +1309,7 @@ class Pickler(pickle.Pickler):
                 is_anyclass = False
 
             if is_anyclass:
-                mod = getattr(obj, "__module__", None)
-                # Prevent self-recursive pickling: cloudpickle's own classes must be
-                # pickled by reference.
-                if mod in ("ray.cloudpickle.cloudpickle", "cloudpickle.cloudpickle", "cloudpickle"):
+                if getattr(obj, "__module__", None) == "builtins":
                     return NotImplemented
                 return _class_reduce(obj)
             elif isinstance(obj, types.FunctionType):

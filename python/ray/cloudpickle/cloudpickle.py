@@ -102,7 +102,7 @@ if PYPY:
     # builtin-code objects only exist in pypy
     builtin_code_type = type(float.__new__.__code__)
 
-_extract_code_globals_cache = weakref.WeakKeyDictionary()
+_extract_code_globals_cache = {}
 
 
 def _get_or_create_tracker_id(class_def):
@@ -303,7 +303,7 @@ def _lookup_module_and_qualname(obj, name=None):
 
 def _extract_code_globals(co):
     """Find all globals names read or written to by codeblock co."""
-    out_names = _extract_code_globals_cache.get(co)
+    out_names = _extract_code_globals_cache.get(id(co))
     if out_names is None:
         # We use a dict with None values instead of a set to get a
         # deterministic order and avoid introducing non-deterministic pickle
@@ -321,7 +321,7 @@ def _extract_code_globals(co):
                 if isinstance(const, types.CodeType):
                     out_names.update(_extract_code_globals(const))
 
-        _extract_code_globals_cache[co] = out_names
+        _extract_code_globals_cache[id(co)] = out_names
 
     return out_names
 

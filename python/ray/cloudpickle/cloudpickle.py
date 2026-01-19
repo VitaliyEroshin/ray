@@ -1311,6 +1311,9 @@ class Pickler(pickle.Pickler):
             if is_anyclass:
                 return _class_reduce(obj)
             elif isinstance(obj, types.FunctionType):
+                mod = getattr(obj, "__module__", None)
+                if mod in ("ray.cloudpickle.cloudpickle", "cloudpickle.cloudpickle", "cloudpickle"):
+                    return NotImplemented
                 return self._function_reduce(obj)
             else:
                 # fallback to save_global, including the Pickler's

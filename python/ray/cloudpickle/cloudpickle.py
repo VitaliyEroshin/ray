@@ -1222,14 +1222,13 @@ class Pickler(pickle.Pickler):
         # cloudpickle.dumps([f1, f2])). There is no such limitation when using
         # cloudpickle.Pickler.dump, as long as the multiple invocations are
         # bound to the same cloudpickle.Pickler instance.
-        base_globals = self.globals_ref.setdefault(id(func.__globals__), {})
+        base_globals = {}
 
-        if base_globals == {}:
-            # Add module attributes used to resolve relative imports
-            # instructions inside func.
-            for k in ["__package__", "__name__", "__path__", "__file__"]:
-                if k in func.__globals__:
-                    base_globals[k] = func.__globals__[k]
+        # Add module attributes used to resolve relative imports
+        # instructions inside func.
+        for k in ["__package__", "__name__", "__path__", "__file__"]:
+            if k in func.__globals__:
+                base_globals[k] = func.__globals__[k]
 
         # Do not bind the free variables before the function is created to
         # avoid infinite recursion.
@@ -1257,7 +1256,7 @@ class Pickler(pickle.Pickler):
         # map functions __globals__ attribute ids, to ensure that functions
         # sharing the same global namespace at pickling time also share
         # their global namespace at unpickling time.
-        self.globals_ref = {}
+        self.globals_ref = None
         self.proto = int(protocol)
 
     if not PYPY:
